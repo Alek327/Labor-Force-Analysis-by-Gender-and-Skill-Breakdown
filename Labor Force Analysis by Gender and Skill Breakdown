@@ -1,0 +1,96 @@
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(openxlsx)
+
+# Function to load data files
+load_data <- function(prompt_message) {
+  cat(prompt_message, "\n")
+  read_excel(file.choose())
+}
+
+# Step 1: Load Data Files
+# Load Population data
+population_data <- load_data("Please select the Population data file:")
+
+# Load LFPR data
+lfpr_data <- load_data("Please select the LFPR data file:")
+
+# Load Gender Distribution data
+gender_distribution <- load_data("Please select the Gender Distribution data file:")
+
+# Load Skill Distribution data (assuming 'skill_distribution' is required and structured similarly)
+skill_distribution <- load_data("Please select the Skill Distribution data file:")
+
+# Step 2: Reshape Population Data to Long Format
+population_long <- population_data %>%
+  pivot_longer(
+    cols = -Year,          # All columns except Year
+    names_to = "Region",    # New column for region names
+    values_to = "Population" # New column for population values
+  ) %>%
+  mutate(Year = as.character(Year))
+
+# Step 3: Reshape LFPR Data to Long Format
+lfpr_long <- lfpr_data %>%
+  pivot_longer(
+    cols = -Year,          # All columns except Year
+    names_to = "Region",    # New column for region names
+    values_to = "LFPR"      # New column for LFPR values
+  ) %>%
+  mutate(Year = as.character(Year))
+
+# Step 4: Calculate Total Labor Force
+labor_force_data <- left_join(population_long, lfpr_long, by = c("Region", "Year")) %>%
+  mutate(Labor_Force = Population * (LFPR / 100))
+
+# Step 5: Reshape Gender Distribution to Long Format and Separate by Gender
+gender_long <- gender_distribution %>%
+  pivot_longer(
+    cols = -Year,                    # Keep 'Year' as is
+    names_to = c("Region", "Gender"), # Separate Region and Gender
+    names_sep = "_",                  # Columns are named in 'Region_Gender' format
+    values_to = "Population"          # Population values
+  ) %>%
+  pivot_wider(
+    names_from = "Gender",            # Pivot Gender (Male/Female) into separate columns
+    values_from = "Population"        # Use population values for pivot
+  ) %>%
+  mutate(Year = as.character(Year))   # Ensure 'Year' is of character type for consistency
+
+# Rename gender columns if necessary
+if (!all(c("Males", "Females") %in% colnames(gender_long))) {
+  gender_long <- gender_long %>%
+    rename(Males = "Male", Females = "Female")
+}
+
+# Step 6: Calculate Gender and Skill-Specific Labor Force
+labor_force_gender_skill <- labor_force_data %>%
+  left_join(gender_long, by = c("Region", "Year")) %>%
+  left_join(skill_distribution, by = c("Region", "Year")) %>%
+  mutate(
+    Male_Labor_Force = ifelse(is.na(Males) | (Males + Females) == 0, NA, Labor_Force * (Males / (Males + Females))),
+    Female_Labor_Force = ifelse(is.na(Females) | (Males + Females) == 0, NA, Labor_Force * (Females / (Males + Females))),
+    Male_Low = Male_Labor_Force * (low / 100),
+    Male_Middle = Male_Labor_Force * (middle / 100),
+    Male_High = Male_Labor_Force * (high / 100),
+    Male_Capitalist = Male_Labor_Force * (capitalist / 100),
+    Female_Low = Female_Labor_Force * (low / 100),
+    Female_Middle = Female_Labor_Force * (middle / 100),
+    Female_High = Female_Labor_Force * (high / 100),
+    Female_Capitalist = Female_Labor_Force * (capitalist / 100)
+  ) %>%
+  select(
+    Region, Year, 
+    Male_Low, Male_Middle, Male_High, Male_Capitalist,
+    Female_Low, Female_Middle, Female_High, Female_Capitalist
+  )
+
+# Step 7: Save Results to Excel File
+output_path <- "Labor_Force_Gender_Skill_Breakdown.xlsx"
+wb <- createWorkbook()
+addWorksheet(wb, "Gender_Skill_Breakdown")
+writeData(wb, "Gender_Skill_Breakdown", labor_force_gender_skill)
+saveWorkbook(wb, output_path, overwrite = TRUE)
+cat("Gender and skill level breakdown saved as:", output_path, "\n")
